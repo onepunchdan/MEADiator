@@ -1,4 +1,5 @@
 from os.path import dirname, basename
+from collections import defaultdict
 
 import zipfile
 
@@ -9,9 +10,91 @@ def isfloat(value):
     except Exception:
         return False
 
-
-
 def parse_meta(file_path):
+    """
+    Read metadata from file.
+
+    Compatible filetypes are ".rcp" ".exp" ".ana" ".info" ".zip"
+    :param file_path: Full path to metadata file.
+    :return: Metadata parsed into dict (often nested).
+    """
+    def tab_level(any_string):
+        """
+        Count number of leading tabs in a string.
+
+        :param any_string:
+        :return:
+        """
+        return (len(any_string) - len(any_string.lstrip("    "))) / 4
+
+    tup_dict = defaultdict(list)
+
+    try:
+        current_block = 0
+        last_level = 0
+        if file_path.endswith(".zip"):
+            if "analysis" in dirname(file_path):
+                ext = ".ana"
+            elif "experiment" in dirname(file_path):
+                ext = ".exp"
+            elif "run" in dirname(file_path):
+                ext = ".rcp"
+            elif "plate" in dirname(file_path):
+                ext = ".info"
+            meta_file = basename(file_path).split(".copied")[0]
+            if ext not in [".ana", ".exp", ".rcp"]:
+                meta_file = meta_file.split("-")[0].split(".zip")[0]
+            meta_file += ext
+            archive = zipfile.ZipFile(file_path, "r")
+            with archive.open(meta_file, "r") as f:
+                for l in f:
+                    if l.decode("ascii").strip() != "":
+                        k, v = l.decode("ascii").split(":", 1)
+                        lvl = tab_level(l.decode("ascii"))
+                        if lvl < last_level:
+                            current_block += 1
+                        last_level = lvl
+                        tup_dict[current_block].append((k.strip(),  v.strip()))
+        else:
+            with open(file_path, "r") as f:
+                for l in f:
+                    if l.strip() != "":
+                        k, v = l.split(":", 1)
+                        lvl = tab_level(l)
+                        if lvl < last_level:
+                            current_block += 1
+                        last_level = lvl
+                        tup_dict[current_block].append((k.strip(),  v.strip()))
+    except:
+        print("Could not read metafile in %s" % (file_path))
+        return {'file_path': file_path}
+
+    final_dict = {}
+
+    def build_dict(tup_list):
+        sub_dict = {}
+        for j, tup in enumerate(tup_list):
+            key, val = tup
+            if val == '':
+                sub_dict[key] = build_dict(tup_list[j+1:])
+                return sub_dict
+            else:
+                if isfloat(val):
+                    val = float(val)
+                    if val.is_integer():
+                        val = int(val)
+                sub_dict[key] = val
+        return sub_dict
+
+    blockinds = sorted(list(tup_dict.keys()))
+
+    for i in blockinds:
+        final_dict.update(build_dict(tup_dict[i]))
+
+    return final_dict
+
+
+def parse_meta_old(file_path):
     """
     Read metadata from file.
 

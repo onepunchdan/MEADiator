@@ -18,6 +18,7 @@ def parse_meta(file_path):
     :param file_path: Full path to metadata file.
     :return: Metadata parsed into dict (often nested).
     """
+
     def tab_level(any_string):
         """
         Count number of leading tabs in a string.
@@ -27,11 +28,9 @@ def parse_meta(file_path):
         """
         return (len(any_string) - len(any_string.lstrip("    "))) / 4
 
-    tup_dict = defaultdict(list)
+    tup_list = []
 
     try:
-        current_block = 0
-        last_level = 0
         if file_path.endswith(".zip"):
             if "analysis" in dirname(file_path):
                 ext = ".ana"
@@ -51,33 +50,31 @@ def parse_meta(file_path):
                     if l.decode("ascii").strip() != "":
                         k, v = l.decode("ascii").split(":", 1)
                         lvl = tab_level(l.decode("ascii"))
-                        if lvl < last_level:
-                            current_block += 1
-                        last_level = lvl
-                        tup_dict[current_block].append((k.strip(),  v.strip()))
+                        tup_list.append((lvl, k.strip(), v.strip()))
         else:
             with open(file_path, "r") as f:
                 for l in f:
                     if l.strip() != "":
                         k, v = l.split(":", 1)
                         lvl = tab_level(l)
-                        if lvl < last_level:
-                            current_block += 1
-                        last_level = lvl
-                        tup_dict[current_block].append((k.strip(),  v.strip()))
+                        tup_list.append((lvl, k.strip(), v.strip()))
     except:
-        print("Could not read metafile in %s" % (file_path))
-        return {'file_path': file_path}
+        print(f"Could not read metafile in {file_path}")
+        return {"file_path": file_path}
 
-    final_dict = {}
-
-    def build_dict(tup_list):
+    def build_dict(tups, clvl=0):
         sub_dict = {}
-        for j, tup in enumerate(tup_list):
-            key, val = tup
-            if val == '':
-                sub_dict[key] = build_dict(tup_list[j+1:])
-                return sub_dict
+        for j, tup in enumerate(tups):
+            lvl, key, val = tup
+            lvl -= clvl
+            if lvl != 0:
+                continue
+            if val == "":
+                root_lvls = [
+                    k for k, tup in enumerate(tups) if tup[0] - clvl == 0 and k > j
+                ]
+                next_rootlvl = min(root_lvls) if len(root_lvls) > 0 else len(tups)
+                sub_dict[key] = build_dict(tups[j + 1 : next_rootlvl], clvl + 1)
             else:
                 if isfloat(val):
                     val = float(val)
@@ -86,117 +83,10 @@ def parse_meta(file_path):
                 sub_dict[key] = val
         return sub_dict
 
-    blockinds = sorted(list(tup_dict.keys()))
-
-    for i in blockinds:
-        final_dict.update(build_dict(tup_dict[i]))
+    final_dict = build_dict(tup_list)
 
     return final_dict
 
-
-def parse_meta_old(file_path):
-    """
-    Read metadata from file.
-
-    Compatible filetypes are ".rcp" ".exp" ".ana" ".info" ".zip"
-    :param file_path: Full path to metadata file.
-    :return: Metadata parsed into dict (often nested).
-    """
-    dict_list = []
-
-    def tab_level(any_string):
-        """
-        Count number of leading tabs in a string.
-
-        :param any_string:
-        :return:
-        """
-        return (len(any_string) - len(any_string.lstrip("    "))) / 4
-
-    try:
-        if file_path.endswith(".zip"):
-            if "analysis" in dirname(file_path):
-                ext = ".ana"
-            elif "experiment" in dirname(file_path):
-                ext = ".exp"
-            elif "run" in dirname(file_path):
-                ext = ".rcp"
-            elif "plate" in dirname(file_path):
-                ext = ".info"
-            meta_file = basename(file_path).split(".copied")[0]
-            if ext not in [".ana", ".exp", ".rcp"]:
-                meta_file = meta_file.split("-")[0].split(".zip")[0]
-            meta_file += ext
-            archive = zipfile.ZipFile(file_path, "r")
-            with archive.open(meta_file, "r") as f:
-                for l in f:
-                    if l.decode("ascii").strip() != "":
-                        k, v = l.decode("ascii").split(":", 1)
-                        lvl = tab_level(l.decode("ascii"))
-                        dict_list.append(
-                            {"name": k.strip(), "value": v.strip(), "level": lvl}
-                        )
-        else:
-            with open(file_path, "r") as f:
-                for l in f:
-                    if l.strip() != "":
-                        k, v = l.split(":", 1)
-                        lvl = tab_level(l)
-                        dict_list.append(
-                            {"name": k.strip(), "value": v.strip(), "level": lvl}
-                        )
-    except:
-        print("Could not read metafile in %s" % (file_path))
-        return {'file_path': file_path}
-
-    def ttree_to_json(ttree, level=0):
-        result = {}
-        for i in range(0, len(ttree)):
-            cn = ttree[i]
-            try:
-                nn = ttree[i + 1]
-            except:
-                nn = {"level": -1}
-            if cn["level"] > level:
-                continue
-            if cn["level"] < level:
-                return result
-            if nn["level"] == level:
-                dict_insert_or_append(result, cn["name"], cn["value"])
-            elif nn["level"] > level:
-                rr = ttree_to_json(ttree[i + 1 :], level=nn["level"])
-                dict_insert_or_append(result, cn["name"], rr)
-            else:
-                dict_insert_or_append(result, cn["name"], cn["value"])
-                return result
-        return result
-
-    def dict_insert_or_append(a_dict, key, val):
-        """
-        Create or append to existing key.
-
-        Insert a value in dict at key if one does not exist. Otherwise, convert
-        value to list and append.
-        :param a_dict:
-        :param key:
-        :param val:
-        :return:
-        """
-        if isfloat(val):
-            val = float(val)
-            if val.is_integer():
-                val = int(val)
-        if key in a_dict:
-            if type(a_dict[key]) != list:
-                a_dict[key] = [a_dict[key]]
-            a_dict[key].append(val)
-        else:
-            a_dict[key] = val
-
-    parsed = ttree_to_json(dict_list)
-    parsed.update({"file_path": file_path})
-
-    return parsed
 
 
 def make_file_dict(d):

@@ -9,15 +9,68 @@ Provdes five object classes:
 5) Analysis
 """
 from os.path import join as pjoin, basename, dirname, exists
-from os import getcwd
+from os import getcwd, makedirs
 from glob import glob
 from time import strftime
 from collections import defaultdict
 import re
 import bz2
 import pickle
-import zipfile
+from zipfile import ZipFile
+from dateutil.parser import parse
+import numpy as np
+import pandas as pd
 from meadiator.io.meta import parse_meta, make_file_dict
+
+PLATE_FILTER_TEMPLATE: dict = {
+    "in_plate_id_list": [],
+    "min_plate_id": None,
+    "max_plate_id": None,
+    "has_element": [],
+    "has_deposition": [],
+    "has_anneal_temp": [],
+    "min_anneal_temp": None,
+    "max_anneal_temp": None,
+    "has_anneal_type": [],
+    "min_date": None,
+    "max_date": None,
+    "has_run_type": [],
+    "has_exp_type": [],
+    "has_ana_type": [],
+    "has_ana_technique": [],
+}
+
+RUN_FILTER_TEMPLATE: dict = {
+    "in_plate_id_list": [],
+    "min_plate_id": None,
+    "max_plate_id": None,
+    "in_element_list": [],
+    "min_date": None,
+    "max_date": None,
+    "has_run_type": [],
+}
+
+EXP_FILTER_TEMPLATE: dict = {
+    "in_plate_id_list": [],
+    "min_plate_id": None,
+    "max_plate_id": None,
+    "in_element_list": [],
+    "min_date": None,
+    "max_date": None,
+    "has_run_type": [],
+}
+
+ANA_FILTER_TEMPLATE: dict = {
+    "in_plate_id_list": [],
+    "min_plate_id": None,
+    "max_plate_id": None,
+    "in_element_list": [],
+    "min_date": None,
+    "max_date": None,
+    "has_run_type": [],
+    "has_ana_techinque": [],
+}
+
 
 class Meadiator:
     """
@@ -32,6 +85,7 @@ class Meadiator:
 
         :param basedir: Path to MEAD root directory
         """
+        self.log = []
         self.base_dir = base_dir
         self.run_dir = pjoin(self.base_dir, "run")
         self.plate_dir = pjoin(self.base_dir, "plate")
@@ -43,41 +97,39 @@ class Meadiator:
             ("exp", self.exp_dir),
             ("ana", self.ana_dir),
         ]
-        files_pck = "%s_files.bz2.pck" % (basename(self.base_dir))
+        files_pck = f"{basename(self.base_dir)}_files.bz2.pck"
         if exists(files_pck):
             self.files = pickle.load(bz2.BZ2File(files_pck, "r"))
-            print("found existing file dictionary in %s" % (pjoin(getcwd(), files_pck)))
-            for key, key_dir in [("plate", self.plate_dir)] + self.object_tups:
-                print(
-                    "%s found %i %s files in %s"
-                    % (strftime("%H:%M:%S"), len(self.files[key]), key, key_dir)
-                )
+            print("found existing file dictionary in {pjoin(getcwd(), files_pck)}")
         else:
             self.files = {}
-            print(
-                "%s generating file lists from %s"
-                % (strftime("%H:%M:%S"), self.base_dir)
-            )
+            self.log_entry(f"generating file lists from {self.base_dir}")
             self.files["plate"] = [
                 x
                 for x in glob(pjoin(self.plate_dir, "*", "*"))
                 if basename(dirname(x)).isdigit()
                 and x.split(".")[-1] in ("zip", "info")
             ]
-            print(
-                "%s found %i plate info files in %s"
-                % (strftime("%H:%M:%S"), len(self.files["plate"]), self.plate_dir)
-            )
+            num_infos = len(self.files["plate"])
+            self.log_entry(f"found {num_infos} plate info files in {self.plate_dir}")
             for key, key_dir in self.object_tups:
                 self.files[key] = glob(pjoin(key_dir, r"**\*.zip"), recursive=True)
-                print(
-                    "%s found %i %s files in %s"
-                    % (strftime("%H:%M:%S"), len(self.files[key]), key, key_dir)
-                )
+                self.log_entry(f"found {len(self.files[key])} {key} files in {key_dir}")
             pickle.dump(self.files, bz2.BZ2File(files_pck, "w"))
-            print("wrote file dictionary to %s" % (pjoin(getcwd(), files_pck)))
+            self.log_entry("wrote file dictionary to {pjoin(getcwd(), files_pck)}")
+        for key, key_dir in [("plate", self.plate_dir)] + self.object_tups:
+            num_files = len(self.files[key])
+            print(f"found {num_files} {key} files in {key_dir}")
         self.meadia = {k: {} for k, _ in self.object_tups}
         self.meadia["load_errors"] = []
+
+    def log_entry(self, entry_string):
+        """
+        Create a log entry string in self.log and include timestamp
+        """
+        now = strftime("%H:%M:%S")
+        self.log.append((now, entry_string))
+        print(f"{now} {entry_string}")
 
     def load_objects(self):
         """
@@ -85,21 +137,20 @@ class Meadiator:
 
         :return:
         """
-        objects_pck = "%s_objects.bz2.pck" % (basename(self.base_dir))
+        objects_pck = f"{basename(self.base_dir)}_objects.bz2.pck"
         if exists(objects_pck):
             self.meadia = pickle.load(bz2.BZ2File(objects_pck, "r"))
             print(
-                "found existing objects dictionary in %s"
-                % (pjoin(getcwd(), objects_pck))
+                f"found existing objects dictionary in {pjoin(getcwd(), objects_pck)}"
             )
         else:
-            print("%s loading plate objects" % (strftime("%H:%M:%S")))
+            self.log_entry(f"loading plate objects")
             self.meadia["plate"] = {}
             for plate_path in self.files["plate"]:
                 plate_key = int(basename(plate_path).split(".")[0])
                 self.meadia["plate"][plate_key] = Plate(plate_path)
             for key, key_dir in self.object_tups:
-                print("%s loading %s objects" % (strftime("%H:%M:%S"), key))
+                self.log_entry(f"loading {key} objects")
                 for file_path in self.files[key]:
                     obj_type = file_path.replace(key_dir, "").strip("\\").split("\\")[0]
                     if obj_type not in self.meadia[key].keys():
@@ -112,6 +163,8 @@ class Meadiator:
                         if isinstance(pid, str):
                             if "," in pid:
                                 pids = [int(x.strip()) for x in pid.split(",")]
+                        elif isinstance(pid, list):
+                            pids = [int(x) for x in pid]
                         else:
                             pids = [pid]
                         for p in pids:
@@ -145,13 +198,13 @@ class Meadiator:
                                     ] = meadia_obj
                             else:
                                 self.meadia["load_errors"].append(
-                                    (file_path, "plate %s not in release" % (p))
+                                    (file_path, f"plate {p} not in release")
                                 )
                     except Exception as e:
                         self.meadia["load_errors"].append((file_path, str(e)))
-            print(
-                "%i files were not loaded due to read errors, see meadia['load_errors']"
-                % (len(self.meadia["load_errors"]))
+            num_errors = len(self.meadia["load_errors"])
+            self.log_entry(
+                f"{num_errors} files were not loaded due to read errors, see meadia['load_errors']"
             )
             in_info_no_release = 0
             for plate_path in self.files["plate"]:  # propogate meta data
@@ -208,17 +261,15 @@ class Meadiator:
                                 else:
                                     in_info_no_release += 1
                                     self.meadia["load_errors"].append(
-                                        "%s %s %s in plate %i info but not in release"
-                                        % (otype, blk, okey, id)
+                                        f"{otype} {blk} {okey} in plate {id} info but not in release"
                                     )
             if in_info_no_release > 0:
-                print(
-                    "%i runs/exps/anas are present in plate info files but were not included in the release, see meadia['load_errors']"
-                    % (in_info_no_release)
+                self.log_entry(
+                    f"{in_info_no_release} runs/exps/anas are present in plate info files but were not included in the release, see meadia['load_errors']"
                 )
             # if len(self.load_errors) == 0:
             pickle.dump(self.meadia, bz2.BZ2File(objects_pck, "w"))
-            print("wrote object dictionary to %s" % (pjoin(getcwd(), objects_pck)))
+            self.log_entry(f"wrote object dictionary to {pjoin(getcwd(), objects_pck)}")
 
     def get_info(self, plate_id, return_dict=False):
         """
@@ -227,8 +278,8 @@ class Meadiator:
         :param plate_id: Integer plate_id.
         :return: Absolute path to info file as string.
         """
-        zip_path = pjoin(self.plate_dir, str(plate_id), "%i.zip" % (plate_id))
-        info_path = pjoin(dirname(zip_path), "%i.info" % (plate_id))
+        zip_path = pjoin(self.plate_dir, str(plate_id), f"{plate_id}.zip")
+        info_path = pjoin(dirname(zip_path), f"{plate_id}.info")
         if exists(zip_path):
             file_path = zip_path
         elif exists(info_path):
@@ -254,34 +305,14 @@ class Meadiator:
         )
         if len(found_path) == 0:
             found_path = [""]
-            print("no path found for %s" % (relative_path))
+            self.log_entry(f"no path found for {relative_path}")
         elif len(found_path) > 1:
-            print("multiple paths found for %s" % (relative_path))
-            print("\n".join(["%i) %s" % (i, v) for i, v in enumerate(found_path)]))
+            self.log_entry(f"multiple paths found for {relative_path}")
+            for i, v in enumerate(found_path):
+                self.log_entry(f"{i}) {v}")
         return found_path[0]
 
-    def find_plates(
-        self,
-        filter_dict={
-            "in_plate_id_list": [],
-            "min_plate_id": None,
-            "max_plate_id": None,
-            "has_element": [],
-            "has_deposition": [],
-            "has_anneal_temp": [],
-            "min_anneal_temp": None,
-            "max_anneal_temp": None,
-            "has_anneal_type": [],
-            "has_date": [],
-            "min_date": None,
-            "max_date": None,
-            "has_run_type": [],
-            "has_exp_type": [],
-            "has_ana_type": [],
-            "has_ana_technique": [],
-        },
-        plate_list=None,
-    ):
+    def find_plates(self, filter_dict=PLATE_FILTER_TEMPLATE, plate_list=None):
         """
         Find Plates that match criteria.
 
@@ -292,64 +323,53 @@ class Meadiator:
             plist = list(self.meadia["plate"].keys())
         else:
             plist = [x.plate_id for x in plate_list]
-        min_p = (
-            min(plist)
-            if filter_dict["min_plate_id"] is None
-            else filter_dict["min_plate_id"]
-        )
-        max_p = (
-            max(plist)
-            if filter_dict["max_plate_id"] is None
-            else filter_dict["max_plate_id"]
-        )
-        plist = [x for x in plist if x >= min_p and x <= max_p]
-        if len(filter_dict["in_plate_id_list"]) > 0:
-            plist = [x for x in plist if x in filter_dict["in_plate_id_list"]]
-        if len(filter_dict["has_element"]) > 0:
-            plist = [
-                x
-                for x in plist
-                if all(
-                    [
-                        e in self.meadia["plate"][x].elements
-                        for e in filter_dict["has_element"]
-                    ]
-                )
-            ]
-        if len(filter_dict["has_run_type"]) > 0:
-            plist = [
-                x
-                for x in plist
-                if all(
-                    [
-                        t in self.meadia["plate"][x].run_dict.keys()
-                        for t in filter_dict["has_run_type"]
-                    ]
-                )
-            ]
-        if len(filter_dict["has_exp_type"]) > 0:
-            plist = [
-                x
-                for x in plist
-                if all(
-                    [
-                        t in self.meadia["plate"][x].exp_dict.keys()
-                        for t in filter_dict["has_exp_type"]
-                    ]
-                )
-            ]
-        if len(filter_dict["has_ana_type"]) > 0:
-            plist = [
-                x
-                for x in plist
-                if all(
-                    [
-                        t in self.meadia["plate"][x].ana_dict.keys()
-                        for t in filter_dict["has_ana_type"]
-                    ]
-                )
-            ]
-        if len(filter_dict["has_ana_technique"]) > 0:
+
+        # filter by plate id
+        if "min_plate_id" in filter_dict.keys():
+            min_p = filter_dict["min_plate_id"]
+        else:
+            min_p = min(plist)
+
+        if "max_plate_id" in filter_dict.keys():
+            max_p = filter_dict["max_plate_id"]
+        else:
+            max_p = max(plist)
+        plist = [x for x in plist if min_p <= x <= max_p]
+
+        if "in_plate_id_list" in filter_dict.keys():
+            pids = filter_dict["in_plate_id_list"]
+            if isinstance(pids, int):
+                pids = [pids]
+            plist = [x for x in plist if x in pids]
+
+        if "has_element" in filter_dict.keys():
+            els = filter_dict["has_element"]
+            if isinstance(els, str):
+                els = [els]
+            plist = [x for x in plist if all([e in self.meadia["plate"][x].elements for e in els])]
+
+        if "has_run_type" in filter_dict.keys():
+            rtypes = filter_dict["has_run_type"]
+            if isinstance(rtypes, str):
+                rtypes = [rtypes]
+            plist = [x for x in plist if all([t in self.meadia["plate"][x].run_dict.keys() for t in rtypes])]
+
+        if "has_exp_type" in filter_dict.keys():
+            etypes = filter_dict["has_exp_type"]
+            if isinstance(etypes, str):
+                etypes = [etypes]
+            plist = [x for x in plist if all([t in self.meadia["plate"][x].exp_dict.keys() for t in etypes])]
+
+        if "has_ana_type" in filter_dict.keys():
+            atypes = filter_dict["has_ana_type"]
+            if isinstance(atypes, str):
+                atypes = [atypes]
+            plist = [x for x in plist if all([t in self.meadia["plate"][x].ana_dict.keys() for t in atypes])]
+
+        if "has_ana_technique" in filter_dict.keys():
+            atechs = filter_dict["has_ana_technique"]
+            if isinstance(atechs, str):
+                atechs = [atechs]
             plist_with_anas = []
             for p in plist:
                 pobj = self.meadia["plate"][p]
@@ -359,74 +379,215 @@ class Meadiator:
                         okey = a.split("/")[-1]
                         if okey in self.meadia["ana"][otype].keys():
                             aobj = self.meadia["ana"][otype][okey]
-                            if any(
-                                [
-                                    x in [y for y in aobj.analysis_names]
-                                    for x in filter_dict["has_ana_technique"]
-                                ]
-                            ):
+                            if any([all([x in y for x in atechs]) for y in aobj.analysis_names]):
                                 plist_with_anas.append(p)
             plist = set(plist_with_anas)
+
+        if "min_date" in filter_dict.keys():
+            min_ts = filter_dict['min_date']
+            if isinstance(min_ts, str):
+                min_ts = parse(min_ts)
+            plist = [p for p in plist if parse(self.meadia["plate"][p].date)>=min_ts]
+
+        if "max_date" in filter_dict.keys():
+            max_ts = filter_dict['max_date']
+            if isinstance(max_ts, str):
+                max_ts = parse(max_ts)
+            plist = [p for p in plist if parse(self.meadia["plate"][p].date)<=max_ts]
+
         return [self.meadia["plate"][p] for p in plist]
 
-    def find_runs(
-        self,
-        filter_dict={
-            "in_plate_id_list": [],
-            "min_plate_id": None,
-            "max_plate_id": None,
-            "in_element_list": [],
-            "has_date": [],
-            "min_date": None,
-            "max_date": None,
-            "has_run_type": [],
-        },
-        plate_list=None,
-    ):
+    def find_runs(self, filter_dict=RUN_FILTER_TEMPLATE, plate_list=None):
         """
         Find Runs that match criteria.
         """
+        if plate_list is None:
+            plist = list(self.meadia["plate"].keys())
+        else:
+            plist = [x.plate_id for x in plate_list]
+        # filter by plate id
+        if "min_plate_id" in filter_dict.keys():
+            min_p = filter_dict["min_plate_id"]
+        else:
+            min_p = min(plist)
 
-        return True
+        if "max_plate_id" in filter_dict.keys():
+            max_p = filter_dict["max_plate_id"]
+        else:
+            max_p = max(plist)
+        plist = [x for x in plist if min_p <= x <= max_p]
 
-    def find_exps(
-        self,
-        filter_dict={
-            "in_plate_id_list": [],
-            "min_plate_id": None,
-            "max_plate_id": None,
-            "in_element_list": [],
-            "has_date": [],
-            "min_date": None,
-            "max_date": None,
-            "has_run_type": [],
-        },
-        plate_list=None,
-    ):
+        if "in_plate_id_list" in filter_dict.keys():
+            pids = filter_dict["in_plate_id_list"]
+            if isinstance(pids, int):
+                pids = [pids]
+            plist = [x for x in plist if x in pids]
+
+        if "has_element" in filter_dict.keys():
+            els = filter_dict["has_element"]
+            if isinstance(els, str):
+                els = [els]
+            plist = [x for x in plist if all([e in self.meadia["plate"][x].elements for e in els])]
+
+        rlist = []
+        if "has_run_type" in filter_dict.keys():
+            rtype = filter_dict["has_run_type"]
+            if isinstance(rtype, str):
+                rtype = [rtype]
+        else:
+            rtype = list(self.meadia["run"].keys())
+        for t in rtype:
+            if t not in self.meadia["run"].keys():
+                print("Run type {t} does not exist in MEAD data set")
+                continue
+            for _, run in self.meadia["run"][t].items():
+                pid = run.plate_id
+                if isinstance(pid, int):
+                    pid = [pid]
+                if any([p in plist for p in pid]):
+                    rlist.append(run)
+
+        if "min_date" in filter_dict.keys():
+            min_ts = filter_dict['min_date']
+            if isinstance(min_ts, str):
+                min_ts = parse(min_ts)
+            rlist = [r for r in rlist if parse(r.date)>=min_ts]
+
+        if "max_date" in filter_dict.keys():
+            max_ts = filter_dict['max_date']
+            if isinstance(max_ts, str):
+                max_ts = parse(max_ts)
+            rlist = [r for r in rlist if parse(r.date)<=max_ts]
+
+        return rlist
+
+    def find_exps(self, filter_dict=EXP_FILTER_TEMPLATE, plate_list=None):
         """
         Find Experiments that match criteria.
         """
-        return True
+        if plate_list is None:
+            plist = list(self.meadia["plate"].keys())
+        else:
+            plist = [x.plate_id for x in plate_list]
+        # filter by plate id
+        if "min_plate_id" in filter_dict.keys():
+            min_p = filter_dict["min_plate_id"]
+        else:
+            min_p = min(plist)
 
-    def find_anas(
-        self,
-        filter_dict={
-            "in_plate_id_list": [],
-            "min_plate_id": None,
-            "max_plate_id": None,
-            "in_element_list": [],
-            "has_date": [],
-            "min_date": None,
-            "max_date": None,
-            "has_run_type": [],
-            "has_ana_techinque": [],
-        },
-        plate_list=None,
-    ):
+        if "max_plate_id" in filter_dict.keys():
+            max_p = filter_dict["max_plate_id"]
+        else:
+            max_p = max(plist)
+        plist = [x for x in plist if min_p <= x <= max_p]
+
+        if "in_plate_id_list" in filter_dict.keys():
+            pids = filter_dict["in_plate_id_list"]
+            if isinstance(pids, int):
+                pids = [pids]
+            plist = [x for x in plist if x in pids]
+
+        if "has_element" in filter_dict.keys():
+            els = filter_dict["has_element"]
+            if isinstance(els, str):
+                els = [els]
+            plist = [x for x in plist if all([e in self.meadia["plate"][x].elements for e in els])]
+
+        elist = []
+        if "has_run_type" in filter_dict.keys():
+            etype = filter_dict["has_run_type"]
+            if isinstance(etype, str):
+                etype = [etype]
+        else:
+            etype = list(self.meadia["exp"].keys())
+        for t in etype:
+            if t not in self.meadia["exp"].keys():
+                print("Experiment type {t} does not exist in MEAD data set")
+                continue
+            for _, exp in self.meadia["exp"][t].items():
+                pid = exp.plate_id
+                if isinstance(pid, int):
+                    pid = [pid]
+                if any([p in plist for p in pid]):
+                    elist.append(exp)
+
+        if "min_date" in filter_dict.keys():
+            min_ts = filter_dict['min_date']
+            if isinstance(min_ts, str):
+                min_ts = parse(min_ts)
+            elist = [e for e in elist if parse(e.date)>=min_ts]
+
+        if "max_date" in filter_dict.keys():
+            max_ts = filter_dict['max_date']
+            if isinstance(max_ts, str):
+                max_ts = parse(max_ts)
+            elist = [e for e in elist if parse(e.date)<=max_ts]
+
+        return elist
+
+    def find_anas(self, filter_dict=ANA_FILTER_TEMPLATE, plate_list=None):
         """
         Find Analyses that match criteria.
         """
-        return True
+        if plate_list is None:
+            plist = list(self.meadia["plate"].keys())
+        else:
+            plist = [x.plate_id for x in plate_list]
+        # filter by plate id
+        if "min_plate_id" in filter_dict.keys():
+            min_p = filter_dict["min_plate_id"]
+        else:
+            min_p = min(plist)
+
+        if "max_plate_id" in filter_dict.keys():
+            max_p = filter_dict["max_plate_id"]
+        else:
+            max_p = max(plist)
+        plist = [x for x in plist if min_p <= x <= max_p]
+
+        if "in_plate_id_list" in filter_dict.keys():
+            pids = filter_dict["in_plate_id_list"]
+            if isinstance(pids, int):
+                pids = [pids]
+            plist = [x for x in plist if x in pids]
+
+        if "has_element" in filter_dict.keys():
+            els = filter_dict["has_element"]
+            if isinstance(els, str):
+                els = [els]
+            plist = [x for x in plist if all([e in self.meadia["plate"][x].elements for e in els])]
+
+        alist = []
+        if "has_ana_type" in filter_dict.keys():
+            atype = filter_dict["has_ana_type"]
+            if isinstance(atype, str):
+                atype = [atype]
+        else:
+            atype = list(self.meadia["ana"].keys())
+        for t in atype:
+            if t not in self.meadia["ana"].keys():
+                print("Analysis type {t} does not exist in MEAD data set")
+                continue
+            for _, ana in self.meadia["ana"][t].items():
+                pid = ana.plate_id
+                if isinstance(pid, int):
+                    pid = [pid]
+                if any([p in plist for p in pid]):
+                    alist.append(ana)
+
+        if "min_date" in filter_dict.keys():
+            min_ts = filter_dict['min_date']
+            if isinstance(min_ts, str):
+                min_ts = parse(min_ts)
+            alist = [a for a in alist if parse(a.date)>=min_ts]
+
+        if "max_date" in filter_dict.keys():
+            max_ts = filter_dict['max_date']
+            if isinstance(max_ts, str):
+                max_ts = parse(max_ts)
+            alist = [a for a in alist if parse(a.date)<=max_ts]
+
+        return alist
 
 
 class Plate:
@@ -496,13 +657,22 @@ class Plate:
 class Meadia:
     """Meadia parent class common methods."""
 
+    def __init__(self):
+        self.files = {}
+        self.path = ""
+
     def list_data(self):
         """
         List all data files contained in object.
 
         :return: list of filenames
         """
-        return []
+        data_list = []
+        for _, techd in self.files.items():
+            for ftype, filed in techd.items():
+                if "_files" in ftype:
+                    data_list += list(filed.keys())
+        return data_list
 
     def list_zip_contents(self):
         """
@@ -510,7 +680,9 @@ class Meadia:
 
         :return: list of filenames
         """
-        return []
+        with ZipFile(self.path) as z:
+            file_list = z.namelist()
+        return file_list
 
     def extract_file(self, file_list, target_path):
         """
@@ -521,15 +693,19 @@ class Meadia:
         :return:
         """
         # if isinstance(self) is "Experiment", get zip path from file_technique
-        return []
+        zfile_dict = []
+        for _, techd in self.files.items():
+            for ftype, filed in techd.items():
+                if "_files" in ftype:
+                    for k in filed.keys():
+                        zfile_dict[k] = filed[k]["source_zip"]
 
-    def get_zip_object(self):
-        """
-        Return zipfile object.
-
-        :return:
-        """
-        return []
+        for f in file_list:
+            try:
+                makedirs(target_path, exist_ok=True)
+                print("")
+            except Exception:
+                print("")
 
     def read_lines(self, data_file):
         """

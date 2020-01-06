@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 from meadiator.io.meta import parse_meta, make_file_dict
 
+
 PLATE_FILTER_TEMPLATE: dict = {
     "in_plate_id_list": [],
     "min_plate_id": None,
@@ -100,7 +101,7 @@ class Meadiator:
         files_pck = f"{basename(self.base_dir)}_files.bz2.pck"
         if exists(files_pck):
             self.files = pickle.load(bz2.BZ2File(files_pck, "r"))
-            print("found existing file dictionary in {pjoin(getcwd(), files_pck)}")
+            print(f"found existing file dictionary in {pjoin(getcwd(), files_pck)}")
         else:
             self.files = {}
             self.log_entry(f"generating file lists from {self.base_dir}")
@@ -116,7 +117,7 @@ class Meadiator:
                 self.files[key] = glob(pjoin(key_dir, r"**\*.zip"), recursive=True)
                 self.log_entry(f"found {len(self.files[key])} {key} files in {key_dir}")
             pickle.dump(self.files, bz2.BZ2File(files_pck, "w"))
-            self.log_entry("wrote file dictionary to {pjoin(getcwd(), files_pck)}")
+            self.log_entry(f"wrote file dictionary to {pjoin(getcwd(), files_pck)}")
         for key, key_dir in [("plate", self.plate_dir)] + self.object_tups:
             num_files = len(self.files[key])
             print(f"found {num_files} {key} files in {key_dir}")
@@ -232,11 +233,11 @@ class Meadiator:
                                     if blk == "run":
                                         # update machine, file_count
                                         if "machine" in blkd.keys():
-                                            self.meadia[blk][otype][
+                                            self.meadia["run"][otype][
                                                 okey
                                             ].machine = blkd["machine"]
                                         if "description" in blkd.keys():
-                                            self.meadia[blk][otype][okey].file_count = (
+                                            self.meadia["run"][otype][okey].file_count = (
                                                 blkd["description"]
                                                 .split("containing ")[1]
                                                 .split(" files")[0]
@@ -244,16 +245,16 @@ class Meadiator:
                                     elif blk == "exp":
                                         # update runs
                                         if "run_paths" in blkd.keys():
-                                            self.meadia[blk][otype][okey].runs = [
-                                                self.meadia["runs"][otype][basename(p)]
+                                            self.meadia["exp"][otype][okey].runs = [
+                                                self.meadia["run"][otype][basename(p)]
                                                 for p in blkd["run_paths"]
                                             ]
                                     elif blk == "ana":
                                         # update experiments
                                         if "experiment_path" in blkd.keys():
-                                            self.meadia[blk][otype][
+                                            self.meadia["ana"][otype][
                                                 okey
-                                            ].experiment = self.meadia["experiments"][
+                                            ].experiment = self.meadia["exp"][
                                                 otype
                                             ][
                                                 basename(blkd["experiment_path"])
@@ -680,7 +681,7 @@ class Meadia:
 
         :return: list of filenames
         """
-        with ZipFile(self.path) as z:
+        with ZipFile(self.path, "r") as z:
             file_list = z.namelist()
         return file_list
 
@@ -692,7 +693,6 @@ class Meadia:
         :param target_path:
         :return:
         """
-        # if isinstance(self) is "Experiment", get zip path from file_technique
         zfile_dict = []
         for _, techd in self.files.items():
             for ftype, filed in techd.items():
@@ -700,12 +700,16 @@ class Meadia:
                     for k in filed.keys():
                         zfile_dict[k] = filed[k]["source_zip"]
 
+        if file_list:
+            makedirs(target_path, exist_ok=True)
+
         for f in file_list:
             try:
-                makedirs(target_path, exist_ok=True)
-                print("")
+                with ZipFile(zfile_dict[f], "r") as z:
+                    z.extract(f, target_path)
+                print(f"extracted {f} from {zfile_dict[f]} to {target_path}")
             except Exception:
-                print("")
+                print(f"could not extract {f} from {zfile_dict[f]} to {target_path}")
 
     def read_lines(self, data_file):
         """
@@ -714,7 +718,20 @@ class Meadia:
         :param data_file:
         :return:
         """
-        return []
+        zfile_dict = []
+        for _, techd in self.files.items():
+            for ftype, filed in techd.items():
+                if "_files" in ftype:
+                    for k in filed.keys():
+                        zfile_dict[k] = filed[k]["source_zip"]
+
+        lines = []
+        with ZipFile(zfile_dict[data_file], "r") as z:
+            with z.open(data_file) as f:
+                for l in f:
+                    lines.append(l.decode("ascii").strip())
+
+        return lines
 
     def read_nparray(self, data_file, skip):
         """
@@ -747,7 +764,7 @@ class Run(Meadia):
         :return:
         """
         tmpd = defaultdict(str, parse_meta(run_path))
-        self.path = tmpd["file_path"]
+        self.path = run_path # tmpd["file_path"]
         self.date = ""
         self.type = tmpd["experiment_type"]
         self.plate_id = tmpd["plate_id"]
@@ -802,7 +819,8 @@ class Experiment(Meadia):
         :return:
         """
         tmpd = defaultdict(str, parse_meta(exp_path))
-        self.path = tmpd["file_path"]
+        base_dir = exp_path.split("\\experiment")[0]
+        self.path = exp_path  # tmpd["file_path"]
         self.date = ""
         self.type = tmpd["experiment_type"]
         self.plate_id = tmpd["plate_ids"]
@@ -827,7 +845,13 @@ class Experiment(Meadia):
                     if isinstance(tmpd[run_key][key][file_group], dict):
                         file_dict = make_file_dict(tmpd[run_key][key][file_group])
                         for v in file_dict.values():
-                            v.update(source_zip=self.path)
+                            v.update(
+                                source_zip=pjoin(
+                                    base_dir,
+                                    "run",
+                                    *tmpd[run_key]["run_path"].split("/")
+                                )
+                            )
                         self.files[file_tech][file_group].update(file_dict)
                     else:
                         continue
@@ -848,6 +872,7 @@ class Experiment(Meadia):
             self.runs.append(meadia_dict["run"][run_type][filename])
 
 
+
 class Analysis(Meadia):
     """
     MEAD Analysis object.
@@ -863,7 +888,7 @@ class Analysis(Meadia):
         :return:
         """
         tmpd = defaultdict(str, parse_meta(ana_path))
-        self.path = tmpd["file_path"]
+        self.path = ana_path # tmpd["file_path"]
         self.date = ""
         self.type = tmpd["experiment_type"]
         self.plate_id = tmpd["plate_ids"]

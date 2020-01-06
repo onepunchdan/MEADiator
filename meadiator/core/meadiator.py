@@ -693,7 +693,7 @@ class Meadia:
         :param target_path:
         :return:
         """
-        zfile_dict = []
+        zfile_dict = {}
         for _, techd in self.files.items():
             for ftype, filed in techd.items():
                 if "_files" in ftype:
@@ -718,7 +718,7 @@ class Meadia:
         :param data_file:
         :return:
         """
-        zfile_dict = []
+        zfile_dict = {}
         for _, techd in self.files.items():
             for ftype, filed in techd.items():
                 if "_files" in ftype:

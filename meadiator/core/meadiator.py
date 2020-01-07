@@ -20,6 +20,7 @@ from zipfile import ZipFile
 from dateutil.parser import parse
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 from meadiator.io.meta import parse_meta, make_file_dict
 
 
@@ -58,7 +59,7 @@ EXP_FILTER_TEMPLATE: dict = {
     "in_element_list": [],
     "min_date": None,
     "max_date": None,
-    "has_run_type": [],
+    "has_exp_type": [],
 }
 
 ANA_FILTER_TEMPLATE: dict = {
@@ -68,7 +69,7 @@ ANA_FILTER_TEMPLATE: dict = {
     "in_element_list": [],
     "min_date": None,
     "max_date": None,
-    "has_run_type": [],
+    "has_ana_type": [],
     "has_ana_techinque": [],
 }
 
@@ -655,6 +656,14 @@ class Plate:
         del tmpd
 
 
+def is_numeric(s):
+    try:
+        float(s)
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
 class Meadia:
     """Meadia parent class common methods."""
 
@@ -693,23 +702,23 @@ class Meadia:
         :param target_path:
         :return:
         """
-        zfile_dict = {}
+        zd = {}
         for _, techd in self.files.items():
             for ftype, filed in techd.items():
                 if "_files" in ftype:
                     for k in filed.keys():
-                        zfile_dict[k] = filed[k]["source_zip"]
+                        zd[k] = filed[k]["source_zip"]
 
         if file_list:
             makedirs(target_path, exist_ok=True)
 
         for f in file_list:
             try:
-                with ZipFile(zfile_dict[f], "r") as z:
+                with ZipFile(zd[f], "r") as z:
                     z.extract(f, target_path)
-                print(f"extracted {f} from {zfile_dict[f]} to {target_path}")
+                print(f"extracted {f} from {zd[f]} to {target_path}")
             except Exception:
-                print(f"could not extract {f} from {zfile_dict[f]} to {target_path}")
+                print(f"could not extract {f} from {zd[f]} to {target_path}")
 
     def read_lines(self, data_file):
         """
@@ -718,35 +727,84 @@ class Meadia:
         :param data_file:
         :return:
         """
-        zfile_dict = {}
+        zd = {}
         for _, techd in self.files.items():
             for ftype, filed in techd.items():
                 if "_files" in ftype:
                     for k in filed.keys():
-                        zfile_dict[k] = filed[k]["source_zip"]
+                        zd[k] = filed[k]["source_zip"]
 
         lines = []
-        with ZipFile(zfile_dict[data_file], "r") as z:
-            with z.open(data_file) as f:
+        with ZipFile(zd[data_file], "r") as z:
+            with z.open(data_file, "r") as f:
                 for l in f:
                     lines.append(l.decode("ascii").strip())
 
         return lines
 
-    def read_nparray(self, data_file, skip):
+    def read_nparray(self, data_file, delim="auto", return_sample_cols=False):
         """
         Return numpy array of data. Intended for image files
         """
         # if isinstance(self) is "Run", load from first numeric to last numeric line
         # check if data_file is image
-        return []
+        if delim=="auto":
+            if data_file.endswith(".txt") or data_file.endswith(".tsv"):
+                delim = "\t"
+            elif data_file.endswith(".csv"):
+                delim = ","
+            else:
+                delim = None
 
-    def read_dataframe(self, data_file, skip, cols):
+        zd = {}
+        for _, techd in self.files.items():
+            for ftype, filed in techd.items():
+                if "_files" in ftype:
+                    for k in filed.keys():
+                        col_names = ""
+                        smp = -1
+                        skip = 0
+                        dlen = 0
+                        if "names" in filed[k].keys():
+                            col_names = filed[k]["names"].split(",")
+                        if "sample_no" in filed[k].keys():
+                            smp = int(filed[k]["sample_no"])
+                        if "skip" in filed[k].keys():
+                            skip = int(filed[k]["skip"])
+                        if "data_len" in filed[k].keys():
+                            dlen = int(filed[k]["data_len"])
+                        zd[k] = {
+                            "zip_path": filed[k]["source_zip"],
+                            "sample_no": smp,
+                            "columns": col_names,
+                            "skip": skip,
+                            "lines": dlen
+                        }
+
+        with ZipFile(zd[data_file]["zip_path"], "r") as z:
+            if data_file.split(".")[-1] in ["png", "bmp", "jpg", "jpeg", "tif", "tiff"]:
+                arr = plt.imread(z.open(data_file, "r"))
+            else:
+                lines = self.read_lines(data_file)
+                lines = lines[zd[data_file]["skip"]:len(lines)-zd[data_file]["lines"]]
+                lines = [[float(e.strip()) for e in l.split(delim)] for l in lines if all([is_numeric(x.strip()) for x in l.split(delim)])]
+                arr = np.array(lines)
+
+        if return_sample_cols:
+            return arr, zd[data_file]["sample_no"], zd[data_file]["columns"]
+        else:
+            return arr
+
+    def read_dataframe(self, data_file, delim="auto"):
         """
         """
         # if isinstance(self) is "Run", load from first numeric to last numeric line
         # check if data_file is image -> can't load
-        return []
+        arr, sample_no, cols = self.read_nparray(data_file, delim, return_sample_cols=True)
+        df = pd.DataFrame(arr)
+        if cols:
+            df.columns = cols
+        return df
 
 
 class Run(Meadia):

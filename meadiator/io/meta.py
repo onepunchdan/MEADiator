@@ -98,7 +98,7 @@ def make_file_dict(d):
             metad = {
                 mk: mv
                 for mk, mv in zip(
-                    ("file_type", "names", "skip", "data_len", "sample_no"),
+                    ("file_type", "names", "skip", "stopind", "sample_no"),
                     vlist
                 )
             }
@@ -106,7 +106,7 @@ def make_file_dict(d):
             metad = {
                 mk: mv
                 for mk, mv in zip(
-                    ("file_type", "names", "skip", "data_len"),
+                    ("file_type", "names", "skip", "stopind"),
                     vlist
                 )
             }

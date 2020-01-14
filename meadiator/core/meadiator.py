@@ -133,14 +133,14 @@ class Meadiator:
         self.log.append((now, entry_string))
         print(f"{now} {entry_string}")
 
-    def load_objects(self):
+    def load_objects(self, overwrite_cache=False):
         """
         Load MEAD objects from file paths.
 
         :return:
         """
         objects_pck = f"{basename(self.base_dir)}_objects.bz2.pck"
-        if exists(objects_pck):
+        if exists(objects_pck) and not overwrite_cache:
             self.meadia = pickle.load(bz2.BZ2File(objects_pck, "r"))
             print(
                 f"found existing objects dictionary in {pjoin(getcwd(), objects_pck)}"
@@ -270,8 +270,28 @@ class Meadiator:
                     f"{in_info_no_release} runs/exps/anas are present in plate info files but were not included in the release, see meadia['load_errors']"
                 )
             # if len(self.load_errors) == 0:
+            self.gen_links()
             pickle.dump(self.meadia, bz2.BZ2File(objects_pck, "w"))
             self.log_entry(f"wrote object dictionary to {pjoin(getcwd(), objects_pck)}")
+
+    def gen_links(self):
+        for type in self.meadia['exp'].keys():
+            for objkey in self.meadia['exp'][type].keys():
+                try:
+                    self.meadia['exp'][type][objkey].get_runs(self.meadia)
+                except Exception:
+                    self.meadia["load_errors"].append(
+                        f"could not link runs for experiment /{type}/{objkey}"
+                    )
+        for type in self.meadia['ana'].keys():
+            for objkey in self.meadia['ana'][type].keys():
+                try:
+                    self.meadia['ana'][type][objkey].get_experiment(self.meadia)
+                except Exception:
+                    self.meadia["load_errors"].append(
+                        f"could not link runs for analysis /{type}/{objkey}"
+                    )
+
 
     def get_info(self, plate_id, return_dict=False):
         """
@@ -763,22 +783,22 @@ class Meadia:
                     for k in filed.keys():
                         col_names = ""
                         smp = -1
-                        skip = 0
-                        dlen = 0
+                        skip = None
+                        stopind = None
                         if "names" in filed[k].keys():
-                            col_names = filed[k]["names"].split(",")
+                            col_names = [x.strip() for x in filed[k]["names"].split(",")]
                         if "sample_no" in filed[k].keys():
                             smp = int(filed[k]["sample_no"])
                         if "skip" in filed[k].keys():
                             skip = int(filed[k]["skip"])
-                        if "data_len" in filed[k].keys():
-                            dlen = int(filed[k]["data_len"])
+                        if "stopind" in filed[k].keys():
+                            stopind = int(filed[k]["stopind"])
                         zd[k] = {
                             "zip_path": filed[k]["source_zip"],
                             "sample_no": smp,
                             "columns": col_names,
                             "skip": skip,
-                            "lines": dlen
+                            "stopind": stopind
                         }
 
         with ZipFile(zd[data_file]["zip_path"], "r") as z:
@@ -786,12 +806,31 @@ class Meadia:
                 arr = plt.imread(z.open(data_file, "r"))
             else:
                 lines = self.read_lines(data_file)
-                lines = lines[zd[data_file]["skip"]:len(lines)-zd[data_file]["lines"]]
-                lines = [[float(e.strip()) for e in l.split(delim)] for l in lines if all([is_numeric(x.strip()) for x in l.split(delim)])]
-                arr = np.array(lines)
+                lines = lines[zd[data_file]["skip"]:zd[data_file]["stopind"]]
+                inds = []
+                flines = []
+                for i,l in enumerate(lines):
+                    if is_numeric(l.split(delim)[0]):
+                        inds.append(i)
+                        flines.append([float(e.strip()) for e in l.split(delim)])
+                try:
+                    col_guess = min(inds)-1
+                except:
+                    col_guess = ""
+                arr = np.array(flines)
 
         if return_sample_cols:
-            return arr, zd[data_file]["sample_no"], zd[data_file]["columns"]
+            if zd[data_file]["columns"]:
+                cols = zd[data_file]["columns"]
+            else:
+                col_line = lines[col_guess]
+                if "," in col_line:
+                    cols = [x.strip() for x in col_line.split(",")]
+                elif "\t" in col_line:
+                    cols = [x.strip() for x in col_line.split("\t")]
+                else:
+                    cols = col_line.split()
+            return arr, zd[data_file]["sample_no"], cols
         else:
             return arr
 
@@ -803,7 +842,8 @@ class Meadia:
         arr, sample_no, cols = self.read_nparray(data_file, delim, return_sample_cols=True)
         df = pd.DataFrame(arr)
         if cols:
-            df.columns = cols
+            if len(cols)==df.shape[1]:
+                df.columns = cols
         return df
 
 
@@ -880,7 +920,7 @@ class Experiment(Meadia):
         base_dir = exp_path.split("\\experiment")[0]
         self.path = exp_path  # tmpd["file_path"]
         self.date = ""
-        self.type = tmpd["experiment_type"]
+        self.type = basename(dirname(self.path))
         self.plate_id = tmpd["plate_ids"]
         if isinstance(self.plate_id, str):
             self.plate_id = [int(x.strip()) for x in self.plate_id.split(",")]
@@ -925,9 +965,8 @@ class Experiment(Meadia):
         :return:
         """
         for p in self.run_paths:
-            run_type = p.strip("/").split("/")[0]
-            filename = p.split("/")[-1]
-            self.runs.append(meadia_dict["run"][run_type][filename])
+            filename = basename(p)
+            self.runs.append(meadia_dict["run"][self.type][filename])
 
 
 
@@ -948,7 +987,7 @@ class Analysis(Meadia):
         tmpd = defaultdict(str, parse_meta(ana_path))
         self.path = ana_path # tmpd["file_path"]
         self.date = ""
-        self.type = tmpd["experiment_type"]
+        self.type = basename(dirname(self.path))
         self.plate_id = tmpd["plate_ids"]
         if isinstance(self.plate_id, str):
             self.plate_id = [int(x.strip()) for x in self.plate_id.split(",")]
@@ -956,14 +995,21 @@ class Analysis(Meadia):
         self.anneal_temp = 0
         self.anneal_type = ""
         self.experiment_path = tmpd["experiment_path"]
-        self.analysis_params = {}
+        self.analyses = {}
+        self.analysis_names = []
         self.files = {}
         ana_keys = [k for k in tmpd.keys() if k.startswith("ana__")]
         self.ana_count = len(ana_keys)
         for ana_key in ana_keys:
-            self.analysis_params[ana_key] = {"name": tmpd[ana_key]["name"]}
+            self.analysis_names.append(tmpd[ana_key]["name"])
+            self.analyses[ana_key] = {"name": tmpd[ana_key]["name"]}
+            if "description" in tmpd[ana_key].keys():
+                self.analyses[ana_key]["description"] = tmpd[ana_key]["description"]
+            if "analysis_fcn_version" in tmpd[ana_key].keys():
+                self.analyses[ana_key]["version"] = tmpd[ana_key]["analysis_fcn_version"]
+            self.analyses[ana_key]["parameters"] = {}
             if "parameters" in tmpd[ana_key].keys():
-                self.analysis_params[ana_key].update(tmpd[ana_key]["parameters"])
+                self.analyses[ana_key]["parameters"].update(tmpd[ana_key]["parameters"])
             file_keys = [k for k in tmpd[ana_key].keys() if "files_" in k]
             if "technique" in tmpd[ana_key].keys():
                 file_tech = tmpd[ana_key]["technique"]
@@ -977,6 +1023,7 @@ class Analysis(Meadia):
                     file_tech = "no_technique"
             else:
                 file_tech = "no_technique"
+            self.analyses[ana_key]["technique"] = file_tech
             for key in file_keys:
                 if file_tech not in self.files.keys():
                     self.files[file_tech] = {}
@@ -991,7 +1038,6 @@ class Analysis(Meadia):
                     else:
                         continue
         self.techs = list(self.files.keys())
-        self.analysis_names = [self.analysis_params[k]["name"] for k in ana_keys]
         del tmpd
         self.experiment = None
 
@@ -1002,6 +1048,5 @@ class Analysis(Meadia):
         :param meadia_dict:
         :return:
         """
-        exp_type = self.experiment_path.strip("/").split("/")[0]
-        filename = self.experiment_path.split("/")[-1]
-        self.experiment = meadia_dict["exp"][exp_type][filename]
+        filename = basename(self.experiment_path)
+        self.experiment = meadia_dict["exp"][self.type][filename]

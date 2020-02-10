@@ -81,7 +81,7 @@ class Meadiator:
     :return:
     """
 
-    def __init__(self, base_dir):
+    def __init__(self, base_dir, overwrite_cache=False):
         """
         Create meadiator object for accessing the MEAD.
 
@@ -100,7 +100,7 @@ class Meadiator:
             ("ana", self.ana_dir),
         ]
         files_pck = f"{basename(self.base_dir)}_files.bz2.pck"
-        if exists(files_pck):
+        if exists(files_pck) and not overwrite_cache:
             self.files = pickle.load(bz2.BZ2File(files_pck, "r"))
             print(f"found existing file dictionary in {pjoin(getcwd(), files_pck)}")
         else:
@@ -149,7 +149,7 @@ class Meadiator:
             self.log_entry(f"loading plate objects")
             self.meadia["plate"] = {}
             for plate_path in self.files["plate"]:
-                plate_key = int(basename(plate_path).split(".")[0])
+                plate_key = int(basename(plate_path).split(".")[0].split("-")[0])
                 self.meadia["plate"][plate_key] = Plate(plate_path)
             for key, key_dir in self.object_tups:
                 self.log_entry(f"loading {key} objects")
@@ -206,68 +206,73 @@ class Meadiator:
                         self.meadia["load_errors"].append((file_path, str(e)))
             num_errors = len(self.meadia["load_errors"])
             self.log_entry(
-                f"{num_errors} files were not loaded due to read errors, see meadia['load_errors']"
+                f"{num_errors} files were not loaded due to read errors"
             )
             in_info_no_release = 0
             for plate_path in self.files["plate"]:  # propogate meta data
                 plate_meta = parse_meta(plate_path)
-                id = plate_meta["plate_id"]
-                elements = self.meadia["plate"][id].elements
-                ann_temp = self.meadia["plate"][id].anneal_temp
-                ann_type = self.meadia["plate"][id].anneal_type
-                for block in ["runs", "experiments", "analyses"]:
-                    blk = block[:3]
-                    if block in plate_meta.keys():
-                        # update date, elements, anneal_temp, anneal_type
-                        if isinstance(plate_meta[block], dict):
-                            for k, blkd in plate_meta[block].items():
-                                otype = blkd["path"].split("/")[1]
-                                okey = blkd["path"].split("/")[-1]
-                                if okey in self.meadia[blk][otype].keys():
-                                    self.meadia[blk][otype][okey].elements = elements
-                                    self.meadia[blk][otype][okey].anneal_temp = ann_temp
-                                    self.meadia[blk][otype][okey].anneal_type = ann_type
-                                    self.meadia[blk][otype][okey].anneal_temp = ann_temp
-                                    self.meadia[blk][otype][okey].date = blkd[
-                                        "created_at"
-                                    ]
-                                    if blk == "run":
-                                        # update machine, file_count
-                                        if "machine" in blkd.keys():
-                                            self.meadia["run"][otype][
-                                                okey
-                                            ].machine = blkd["machine"]
-                                        if "description" in blkd.keys():
-                                            self.meadia["run"][otype][okey].file_count = (
-                                                blkd["description"]
-                                                .split("containing ")[1]
-                                                .split(" files")[0]
-                                            )
-                                    elif blk == "exp":
-                                        # update runs
-                                        if "run_paths" in blkd.keys():
-                                            self.meadia["exp"][otype][okey].runs = [
-                                                self.meadia["run"][otype][basename(p)]
-                                                for p in blkd["run_paths"]
-                                            ]
-                                    elif blk == "ana":
-                                        # update experiments
-                                        if "experiment_path" in blkd.keys():
-                                            self.meadia["ana"][otype][
-                                                okey
-                                            ].experiment = self.meadia["exp"][
-                                                otype
-                                            ][
-                                                basename(blkd["experiment_path"])
-                                            ]
-                                else:
-                                    in_info_no_release += 1
-                                    self.meadia["load_errors"].append(
-                                        f"{otype} {blk} {okey} in plate {id} info but not in release"
-                                    )
+                if "plate_id" in plate_meta.keys():
+                    id = plate_meta["plate_id"]
+                    elements = self.meadia["plate"][id].elements
+                    ann_temp = self.meadia["plate"][id].anneal_temp
+                    ann_type = self.meadia["plate"][id].anneal_type
+                    for block in ["runs", "experiments", "analyses"]:
+                        blk = block[:3]
+                        if block in plate_meta.keys():
+                            # update date, elements, anneal_temp, anneal_type
+                            if isinstance(plate_meta[block], dict):
+                                for k, blkd in plate_meta[block].items():
+                                    otype = blkd["path"].split("/")[1]
+                                    okey = blkd["path"].split("/")[-1]
+                                    if okey in self.meadia[blk][otype].keys():
+                                        self.meadia[blk][otype][okey].elements = elements
+                                        self.meadia[blk][otype][okey].anneal_temp = ann_temp
+                                        self.meadia[blk][otype][okey].anneal_type = ann_type
+                                        self.meadia[blk][otype][okey].anneal_temp = ann_temp
+                                        self.meadia[blk][otype][okey].date = blkd[
+                                            "created_at"
+                                        ]
+                                        if blk == "run":
+                                            # update machine, file_count
+                                            if "machine" in blkd.keys():
+                                                self.meadia["run"][otype][
+                                                    okey
+                                                ].machine = blkd["machine"]
+                                            if "description" in blkd.keys():
+                                                self.meadia["run"][otype][okey].file_count = (
+                                                    blkd["description"]
+                                                    .split("containing ")[1]
+                                                    .split(" files")[0]
+                                                )
+                                        elif blk == "exp":
+                                            # update runs
+                                            if "run_paths" in blkd.keys():
+                                                self.meadia["exp"][otype][okey].runs = [
+                                                    self.meadia["run"][otype][basename(p)]
+                                                    for p in blkd["run_paths"]
+                                                ]
+                                        elif blk == "ana":
+                                            # update experiments
+                                            if "experiment_path" in blkd.keys():
+                                                self.meadia["ana"][otype][
+                                                    okey
+                                                ].experiment = self.meadia["exp"][
+                                                    otype
+                                                ][
+                                                    basename(blkd["experiment_path"])
+                                                ]
+                                    else:
+                                        in_info_no_release += 1
+                                        self.meadia["load_errors"].append(
+                                            f"{otype} {blk} {okey} in plate {id} info but not in release"
+                                        )
+                else:
+                    self.log_entry(
+                    f"{plate_path} does not contain a 'plate_id' key"
+                )
             if in_info_no_release > 0:
                 self.log_entry(
-                    f"{in_info_no_release} runs/exps/anas are present in plate info files but were not included in the release, see meadia['load_errors']"
+                    f"{in_info_no_release} runs/exps/anas are present in plate info files but were not included in the release"
                 )
             # if len(self.load_errors) == 0:
             self.gen_links()
@@ -632,13 +637,18 @@ class Plate:
         self.date = tmpd["created_at"]
         self.lineage = tmpd["lineage"]
         desc = tmpd["description"]
-        desc_elstring = desc.replace("Material library with ", "").split()[0]
+        desc_elstring = desc.replace("Material library with ", "")
+        if desc_elstring != "":
+            desc_elstring = desc_elstring.split()[0]
         desc_elstring = re.sub("([A-Za-z])([A-Z])", "\\1,\\2", desc_elstring)
         desc_els = desc_elstring.split(",")
         if isinstance(desc_els, str):
             desc_els = [desc_els]
         self.elements = list(set(desc_els))
-        self.deposition_method = desc.split("deposited by ")[-1].split()[0]
+        if desc != "":
+            self.deposition_method = desc.split("deposited by ")[-1].split()[0]
+        else:
+            self.deposition_method = ""
         self.substrate = tmpd["substrate"]
         self.map = tmpd["screening_map_id"]
         if "annealed at" in desc:
@@ -966,6 +976,7 @@ class Experiment(Meadia):
         """
         for p in self.run_paths:
             filename = basename(p)
+            run_file = [x for x in meadia_dict["run"][self.type].keys() if filename.split('.done')[0].split('.copied')[0] in x][0]
             self.runs.append(meadia_dict["run"][self.type][filename])
 
 
@@ -1049,4 +1060,5 @@ class Analysis(Meadia):
         :return:
         """
         filename = basename(self.experiment_path)
-        self.experiment = meadia_dict["exp"][self.type][filename]
+        exp_file = [x for x in meadia_dict["exp"][self.type].keys() if filename.split('.done')[0].split('.copied')[0] in x][0]
+        self.experiment = meadia_dict["exp"][self.type][exp_file]

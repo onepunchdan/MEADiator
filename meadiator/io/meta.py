@@ -130,4 +130,4 @@ def make_file_dict(d):
         else:
             metad = {"file_type": vlist[0]}
         filed[fn] = metad
-        return filed
+    return filed

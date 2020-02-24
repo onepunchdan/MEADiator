@@ -76,7 +76,7 @@ def parse_meta(file_path):
                 next_rootlvl = min(root_lvls) if len(root_lvls) > 0 else len(tups)
                 sub_dict[key] = build_dict(tups[j + 1 : next_rootlvl], clvl + 1)
             else:
-                if isfloat(val):
+                if 'name' not in key and isfloat(val):
                     val = float(val)
                     if val.is_integer():
                         val = int(val)

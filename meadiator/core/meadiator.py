@@ -280,21 +280,21 @@ class Meadiator:
             self.log_entry(f"wrote object dictionary to {pjoin(getcwd(), objects_pck)}")
 
     def gen_links(self):
-        for type in self.meadia['exp'].keys():
-            for objkey in self.meadia['exp'][type].keys():
+        for mtype in self.meadia['exp'].keys():
+            for objkey in self.meadia['exp'][mtype].keys():
                 try:
-                    self.meadia['exp'][type][objkey].get_runs(self.meadia)
+                    self.meadia['exp'][mtype][objkey].get_runs(self.meadia)
                 except Exception:
                     self.meadia["load_errors"].append(
-                        f"could not link runs for experiment /{type}/{objkey}"
+                        f"could not link runs for experiment /{mtype}/{objkey}"
                     )
-        for type in self.meadia['ana'].keys():
-            for objkey in self.meadia['ana'][type].keys():
+        for mtype in self.meadia['ana'].keys():
+            for objkey in self.meadia['ana'][mtype].keys():
                 try:
-                    self.meadia['ana'][type][objkey].get_experiment(self.meadia)
+                    self.meadia['ana'][mtype][objkey].get_experiment(self.meadia)
                 except Exception:
                     self.meadia["load_errors"].append(
-                        f"could not link runs for analysis /{type}/{objkey}"
+                        f"could not link runs for analysis /{mtype}/{objkey}"
                     )
 
 

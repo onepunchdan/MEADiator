@@ -9,7 +9,7 @@ Provdes five object classes:
 5) Analysis
 """
 from os.path import join as pjoin, basename, dirname, exists
-from os import getcwd, makedirs
+from os import getcwd, makedirs, sep
 from glob import glob
 from time import strftime
 from collections import defaultdict
@@ -115,7 +115,7 @@ class Meadiator:
             num_infos = len(self.files["plate"])
             self.log_entry(f"found {num_infos} plate info files in {self.plate_dir}")
             for key, key_dir in self.object_tups:
-                self.files[key] = glob(pjoin(key_dir, r"**\*.zip"), recursive=True)
+                self.files[key] = glob(pjoin(key_dir, "**", "*.zip"), recursive=True)
                 self.log_entry(f"found {len(self.files[key])} {key} files in {key_dir}")
             pickle.dump(self.files, bz2.BZ2File(files_pck, "w"))
             self.log_entry(f"wrote file dictionary to {pjoin(getcwd(), files_pck)}")
@@ -154,7 +154,7 @@ class Meadiator:
             for key, key_dir in self.object_tups:
                 self.log_entry(f"loading {key} objects")
                 for file_path in self.files[key]:
-                    obj_type = file_path.replace(key_dir, "").strip("\\").split("\\")[0]
+                    obj_type = file_path.replace(key_dir, "").strip("\\/").split(sep)[0]
                     if obj_type not in self.meadia[key].keys():
                         self.meadia[key][obj_type] = {}
                     obj_key = basename(file_path)
@@ -224,6 +224,9 @@ class Meadiator:
                                 for k, blkd in plate_meta[block].items():
                                     otype = blkd["path"].split("/")[1]
                                     okey = blkd["path"].split("/")[-1]
+                                    if not otype in self.meadia[blk].keys():
+                                        print(f"{otype} not found in {blk} info for plate {id}")
+                                        continue
                                     if okey in self.meadia[blk][otype].keys():
                                         self.meadia[blk][otype][okey].elements = elements
                                         self.meadia[blk][otype][okey].anneal_temp = ann_temp
@@ -771,6 +774,25 @@ class Meadia:
                     lines.append(l.decode("ascii").strip())
 
         return lines
+    
+    def get_file(self, data_file):
+        """
+        Basic read_lines from file. Convenience wrapper for zipped files.
+
+        :param data_file:
+        :return:
+        """
+        zd = {}
+        for _, techd in self.files.items():
+            for ftype, filed in techd.items():
+                if "_files" in ftype:
+                    for k in filed.keys():
+                        zd[k] = filed[k]["source_zip"]
+
+        with ZipFile(zd[data_file], "r") as z:
+            f = z.open(data_file, "r")
+
+        return f
 
     def read_nparray(self, data_file, delim="auto", return_sample_cols=False):
         """
@@ -927,7 +949,7 @@ class Experiment(Meadia):
         :return:
         """
         tmpd = defaultdict(str, parse_meta(exp_path))
-        base_dir = exp_path.split("\\experiment")[0]
+        base_dir = exp_path.strip("\\/").split("experiment")[0]
         self.path = exp_path  # tmpd["file_path"]
         self.date = ""
         self.type = basename(dirname(self.path))
@@ -1062,3 +1084,17 @@ class Analysis(Meadia):
         filename = basename(self.experiment_path)
         exp_file = [x for x in meadia_dict["exp"][self.type].keys() if filename.split('.done')[0].split('.copied')[0] in x][0]
         self.experiment = meadia_dict["exp"][self.type][exp_file]
+
+        
+# ftype can be: 'pstat', 'spectrum', 'inter', 'inter_rawlen', 'fom'
+def list_files(mobj, ftype, tech):
+    sample_fns = []
+    if tech in mobj.files.keys():
+        if f"{ftype}_files" in mobj.files[tech].keys():
+            filed = mobj.files[tech][f"{ftype}_files"]
+            for fn, metad in filed.items():
+                if 'sample_no' in metad.keys():
+                    sample_fns.append((int(metad['sample_no']), fn))
+                else:
+                    sample_fns.append((None, fn))
+    return sorted(sample_fns)
